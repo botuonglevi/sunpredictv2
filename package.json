@@ -1,0 +1,19 @@
+{
+  "name": "sunwin-tx-collector",
+  "version": "1.0.0",
+  "description": "Sunwin Tài Xỉu Collector & Predictor",
+  "main": "sunv2.js",
+  "scripts": {
+    "start": "node sunv2.js",
+    "dev": "nodemon sunv2.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": ["sunwin", "taixiu", "predictor", "collector"],
+  "author": "",
+  "license": "ISC"
+}
