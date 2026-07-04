@@ -1,16 +1,18 @@
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const express = require('express');
 
 // --- Cấu hình & Khởi tạo ---
 const API_URL = "http://fi15.bot-hosting.net:27132/api/sun";
 const DATA_FILE = "collected_data/sunwin_tx.json";
 const STATS_FILE = "database/stats.json";
+const PORT = 3000; // Cổng cho API dự đoán
 
 // Các giới hạn
-const MIN_DATA_FOR_PREDICTION = 100;  // Giữ nguyên như file gốc
+const MIN_DATA_FOR_PREDICTION = 100;
 const MAX_PREDICTIONS = 100000;          
-const MAX_STORAGE = 10000;             
+const MAX_STORAGE = 10000;
 
 const vnNow = () => {
     const d = new Date();
@@ -303,6 +305,133 @@ function safeInt(v, d = 0) {
     return isNaN(parsed) ? d : parsed;
 }
 
+// --- API Server ---
+const app = express();
+app.use(express.json());
+
+// Endpoint lấy dự đoán
+app.get('/api/dudoan', (req, res) => {
+    const history = loadHistory();
+    
+    if (history.length < 5) {
+        return res.json({
+            status: 'error',
+            message: 'Chưa đủ dữ liệu để dự đoán. Cần ít nhất 5 phiên.',
+            current_data: history.length
+        });
+    }
+    
+    try {
+        const prediction = predictor.predict(history);
+        const cur = history[history.length - 1];
+        let ph = cur.phien || 0;
+        if (typeof ph === 'string') {
+            const cleaned = ph.replace('#', '');
+            ph = !isNaN(cleaned) ? parseInt(cleaned) : 0;
+        }
+        
+        // Lấy 10 phiên gần nhất
+        const recentSessions = history.slice(-10).map(h => ({
+            phien: h.phien,
+            ket_qua: h.ket_qua,
+            tong: h.tong,
+            xuc_xac: [h.xuc_xac_1, h.xuc_xac_2, h.xuc_xac_3]
+        }));
+        
+        // Thống kê
+        const total = stats.total || 0;
+        const correct = stats.correct || 0;
+        const wrong = stats.wrong || 0;
+        const accuracy = total > 0 ? ((correct / total) * 100).toFixed(2) : '0.00';
+        
+        res.json({
+            status: 'success',
+            timestamp: vnNow(),
+            current_phien: ph,
+            next_phien: ph + 1,
+            prediction: {
+                result: prediction.pred,
+                confidence: prediction.conf + '%',
+                type: prediction.type,
+                reason: prediction.reason
+            },
+            history: {
+                recent: recentSessions,
+                total_sessions: history.length
+            },
+            statistics: {
+                total_predictions: stats.total_predictions_made || 0,
+                correct: correct,
+                wrong: wrong,
+                accuracy: accuracy + '%'
+            },
+            prediction_started: stats.prediction_started,
+            min_data_required: MIN_DATA_FOR_PREDICTION
+        });
+    } catch (e) {
+        res.status(500).json({
+            status: 'error',
+            message: 'Lỗi khi dự đoán: ' + e.message
+        });
+    }
+});
+
+// Endpoint lấy thống kê
+app.get('/api/stats', (req, res) => {
+    const history = loadHistory();
+    const total = stats.total || 0;
+    const correct = stats.correct || 0;
+    const wrong = stats.wrong || 0;
+    const accuracy = total > 0 ? ((correct / total) * 100).toFixed(2) : '0.00';
+    
+    res.json({
+        status: 'success',
+        timestamp: vnNow(),
+        statistics: {
+            total_predictions: stats.total_predictions_made || 0,
+            correct: correct,
+            wrong: wrong,
+            accuracy: accuracy + '%',
+            total_sessions: history.length,
+            prediction_started: stats.prediction_started
+        },
+        limits: {
+            min_data_required: MIN_DATA_FOR_PREDICTION,
+            max_predictions: MAX_PREDICTIONS,
+            max_storage: MAX_STORAGE
+        }
+    });
+});
+
+// Endpoint lấy lịch sử gần nhất
+app.get('/api/history', (req, res) => {
+    const history = loadHistory();
+    const limit = parseInt(req.query.limit) || 20;
+    const recent = history.slice(-limit).reverse().map(h => ({
+        phien: h.phien,
+        ket_qua: h.ket_qua,
+        tong: h.tong,
+        xuc_xac: [h.xuc_xac_1, h.xuc_xac_2, h.xuc_xac_3]
+    }));
+    
+    res.json({
+        status: 'success',
+        timestamp: vnNow(),
+        total: history.length,
+        limit: limit,
+        data: recent
+    });
+});
+
+// Khởi động API server
+app.listen(PORT, () => {
+    console.log(`🌐 API Server đang chạy tại: http://localhost:${PORT}`);
+    console.log(`📊 Endpoints:`);
+    console.log(`   - GET /api/dudoan  - Lấy dự đoán`);
+    console.log(`   - GET /api/stats   - Lấy thống kê`);
+    console.log(`   - GET /api/history - Lấy lịch sử (?limit=20)`);
+});
+
 // --- Main Collector ---
 async function collect() {
     console.log("🚀 SUNWIN TX COLLECTOR - KHỞI ĐỘNG");
@@ -310,6 +439,7 @@ async function collect() {
     console.log(`📊 Yêu cầu dữ liệu tối thiểu: ${MIN_DATA_FOR_PREDICTION.toLocaleString()} phiên`);
     console.log(`🎯 Giới hạn dự đoán: ${MAX_PREDICTIONS.toLocaleString()} phiên`);
     console.log(`💾 Giới hạn lưu trữ: ${MAX_STORAGE.toLocaleString()} phiên`);
+    console.log(`🌐 API Port: ${PORT}`);
     console.log("═══════════════════════════════════════════\n");
     
     let history = loadHistory();
@@ -330,7 +460,6 @@ async function collect() {
         try {
             const response = await axios.get(API_URL, { timeout: 15000 });
             if (response.status === 200) {
-                // 🔥 CHỈ SỬA PHẦN NÀY - Lấy dữ liệu từ API
                 const apiData = response.data;
                 
                 let dataArray = [];
@@ -341,7 +470,6 @@ async function collect() {
                 } else if (apiData.Phien) {
                     dataArray = [apiData];
                 } else {
-                    // Không nhận dạng được cấu trúc
                     continue;
                 }
                 
@@ -350,7 +478,6 @@ async function collect() {
                     let newSessions = [];
 
                     for (const item of dataArray) {
-                        // 🔥 CHỈ SỬA PHẦN NÀY - Lấy đúng key từ JSON
                         const ph = safeInt(item.Phien);
                         if (ph <= 0 || existing.has(ph)) continue;
 
@@ -411,4 +538,5 @@ process.on('SIGINT', () => {
     process.exit();
 });
 
+// Chạy cả collector và API server
 collect().catch(console.error);
