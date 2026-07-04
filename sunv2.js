@@ -8,7 +8,7 @@ const DATA_FILE = "collected_data/sunwin_tx.json";
 const STATS_FILE = "database/stats.json";
 
 // Các giới hạn
-const MIN_DATA_FOR_PREDICTION = 10000;  // Giữ nguyên như file gốc
+const MIN_DATA_FOR_PREDICTION = 100;  // Giữ nguyên như file gốc
 const MAX_PREDICTIONS = 100000;          
 const MAX_STORAGE = 10000;             
 
